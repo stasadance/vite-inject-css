@@ -46,11 +46,19 @@ function injectionCSSCodePlugin(cssToInject: string, styleId?: string): Plugin {
         },
         load(id: string) {
             if (id == cssInjectedByJsId) {
-                const cssCode = JSON.stringify(cssToInject.trim());
+                let cssCode = '';
+                cssToInject
+                    .trim()
+                    .split('}')
+                    .map((e) => (e += '}'))
+                    .slice(0, -1)
+                    .forEach((x) => {
+                        cssCode += `elementStyle.sheet.insertRule(${JSON.stringify(x)});`;
+                    });
 
                 return `try{if(typeof document != 'undefined'){var elementStyle = document.createElement('style');${
                     typeof styleId == 'string' && styleId.length > 0 ? `elementStyle.id = '${styleId}';` : ''
-                }elementStyle.appendChild(document.createTextNode(''));document.head.appendChild(elementStyle);${cssCode}.split("}").map(e => e += "}").slice(0, -1).forEach((x) => elementStyle.sheet.insertRule(x));document.head.appendChild(elementStyle);}}catch(e){console.error('vite-inject-css', e);}`;
+                }elementStyle.appendChild(document.createTextNode(''));document.head.appendChild(elementStyle);${cssCode}}}catch(e){console.error('vite-inject-css', e);}`;
             }
         },
     };
