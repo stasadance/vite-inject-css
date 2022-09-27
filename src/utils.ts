@@ -38,7 +38,7 @@ export async function buildCSSInjectionCode(cssToInject: string, styleId?: strin
  */
 function injectionCSSCodePlugin(cssToInject: string, styleId?: string): Plugin {
     return {
-        name: 'vite:injection-css-code-plugin',
+        name: 'vite:inject-css',
         resolveId(id: string) {
             if (id == cssInjectedByJsId) {
                 return id;
@@ -50,7 +50,7 @@ function injectionCSSCodePlugin(cssToInject: string, styleId?: string): Plugin {
 
                 return `try{if(typeof document != 'undefined'){var elementStyle = document.createElement('style');${
                     typeof styleId == 'string' && styleId.length > 0 ? `elementStyle.id = '${styleId}';` : ''
-                }elementStyle.appendChild(document.createTextNode(${cssCode}));document.head.appendChild(elementStyle);}}catch(e){console.error('vite-plugin-css-injected-by-js', e);}`;
+                }elementStyle.appendChild(document.createTextNode(''));document.head.appendChild(elementStyle);${cssCode}.split("}").map(e => e += "}").slice(0, -1).forEach((x) => elementStyle.sheet.insertRule(x));document.head.appendChild(elementStyle);}}catch(e){console.error('vite-inject-css', e);}`;
             }
         },
     };
