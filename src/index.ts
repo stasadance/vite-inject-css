@@ -1,74 +1,92 @@
-import { Plugin, ResolvedConfig } from 'vite';
-import { OutputAsset, OutputChunk } from 'rollup';
-import { buildCSSInjectionCode, removeLinkStyleSheets } from './utils.js';
+import { Plugin, ResolvedConfig } from "vite";
+import { OutputAsset, OutputChunk } from "rollup";
+import {
+    removeLinkStyleSheets,
+    generateInsertRules,
+    buildInjectCode,
+} from "./utils.js";
 
 /**
- * Inject the CSS compiled with JS.
+ * Inject CSS via CSSStyleSheet.insertRule.
  *
  * @return {Plugin}
  */
-export default function cssInjectedByJsPlugin(
-    { topExecutionPriority, styleId }: { topExecutionPriority?: boolean; styleId?: string } | undefined = {
-        topExecutionPriority: true,
-        styleId: '',
+export default function injectCSS(
+    { obfuscate }: { obfuscate?: boolean } | undefined = {
+        obfuscate: false,
     }
 ): Plugin {
-    //Globally so we can add it to legacy and non-legacy bundle.
-    let cssToInject: string = '';
-    let config: ResolvedConfig;
+    let resolvedConfig: ResolvedConfig;
 
     return {
-        apply: 'build',
-        enforce: 'post',
-        name: 'css-in-js-plugin',
-        configResolved(_config) {
-            config = _config;
-        },
-        async generateBundle(opts, bundle) {
-            if (config.build.ssr) {
-                return;
-            }
+        apply: "build",
+        enforce: "post",
+        name: "vite-inject-css",
 
-            const htmlFiles = Object.keys(bundle).filter((i) => i.endsWith('.html'));
+        configResolved(config) {
+            resolvedConfig = config;
+        },
+
+        async generateBundle(_, bundle) {
             const cssAssets = Object.keys(bundle).filter(
-                (i) => bundle[i].type == 'asset' && bundle[i].fileName.endsWith('.css')
+                (i) =>
+                    bundle[i].type == "asset" &&
+                    bundle[i].fileName.endsWith(".css")
             );
+
+            const htmlAssets = Object.keys(bundle).filter((i) =>
+                i.endsWith(".html")
+            );
+
             const jsAssets = Object.keys(bundle).filter(
                 (i) =>
-                    bundle[i].type == 'chunk' &&
+                    bundle[i].type == "chunk" &&
                     bundle[i].fileName.match(/.[cm]?js$/) != null &&
-                    !bundle[i].fileName.includes('polyfill')
+                    !bundle[i].fileName.includes("polyfill")
             );
 
-            const allCssCode = cssAssets.reduce(function extractCssCodeAndDeleteFromBundle(previousValue, cssName) {
-                const cssAsset = bundle[cssName] as OutputAsset;
-                const result = previousValue + cssAsset.source;
-                delete bundle[cssName];
-
-                return result;
-            }, '');
-
-            if (allCssCode.length > 0) {
-                cssToInject = allCssCode;
-            }
-
-            for (const name of htmlFiles) {
-                const htmlChunk = bundle[name] as OutputAsset;
-                let replacedHtml = htmlChunk.source as string;
-
-                cssAssets.forEach((cssName) => {
-                    replacedHtml = removeLinkStyleSheets(replacedHtml, cssName);
-                    htmlChunk.source = replacedHtml;
+            for (const cssName of cssAssets) {
+                htmlAssets.forEach((name) => {
+                    const htmlChunk = bundle[name] as OutputAsset;
+                    const html = htmlChunk.source as string;
+                    htmlChunk.source = removeLinkStyleSheets(html, cssName);
                 });
+
+                const cssAsset = bundle[cssName] as OutputAsset;
+                const cssSource = cssAsset.source as string;
+                const jsAsset = bundle[jsAssets[0]] as OutputChunk;
+
+                let outputCode = `(function() { try {`;
+                outputCode += `const style = document.createElement("style");`;
+                outputCode += `style.appendChild(document.createTextNode(""));`;
+                outputCode += `document.head.appendChild(style);`;
+
+                const rules = generateInsertRules(cssSource);
+                if (obfuscate) {
+                    const encoder = new TextEncoder();
+                    outputCode += `const dec = new TextDecoder();`;
+                    outputCode += `[${rules
+                        .map((x) => `[${encoder.encode(x).toString()}]`)
+                        .join(",")}]`;
+                    outputCode += `.forEach((x) => style.sheet.insertRule(dec.decode(new Uint8Array(x))));`;
+                } else {
+                    outputCode += rules
+                        .map(
+                            (x) =>
+                                `style.sheet.insertRule(${JSON.stringify(x)});`
+                        )
+                        .join("");
+                }
+                outputCode += `} catch(e) { console.log("vite-inject-css", e) } })();`;
+
+                const injection = await buildInjectCode(
+                    outputCode + jsAsset.code,
+                    resolvedConfig
+                );
+
+                jsAsset.code = injection;
+                delete bundle[cssName];
             }
-
-            const jsAsset = bundle[jsAssets[0]] as OutputChunk;
-
-            const cssInjectionCode = await buildCSSInjectionCode(cssToInject, styleId);
-            const appCode = jsAsset.code;
-            jsAsset.code = topExecutionPriority ? '' : appCode;
-            jsAsset.code += cssInjectionCode ? cssInjectionCode.code : '';
-            jsAsset.code += !topExecutionPriority ? '' : appCode;
         },
     };
 }

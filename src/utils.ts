@@ -1,70 +1,71 @@
-import { build, Plugin } from 'vite';
-import { OutputChunk } from 'rollup';
+import { Plugin, ResolvedConfig, build } from "vite";
+import { RollupOutput, OutputChunk } from "rollup";
 
-const cssInjectedByJsId = '\0vite/all-css';
+const injectId = "\0vite/all-css";
 
-export async function buildCSSInjectionCode(cssToInject: string, styleId?: string): Promise<OutputChunk | null> {
+export async function buildInjectCode(
+    outputCode: string,
+    resolvedConfig: ResolvedConfig
+) {
     const res = await build({
-        root: '',
+        root: "",
         configFile: false,
-        logLevel: 'error',
-        plugins: [injectionCSSCodePlugin(cssToInject, styleId)],
+        logLevel: "error",
+        plugins: [buildPlugin(outputCode), ...resolvedConfig.plugins],
         build: {
+            ...resolvedConfig.build,
             write: false,
-            target: 'es2015',
-            minify: 'esbuild',
-            assetsDir: '',
+            assetsDir: "",
             rollupOptions: {
+                ...resolvedConfig.build.rollupOptions,
                 input: {
-                    ['all-css']: cssInjectedByJsId,
-                },
-                output: {
-                    format: 'iife',
-                    manualChunks: undefined,
+                    ["all-css"]: injectId,
                 },
             },
         },
     });
-    const _cssChunk = Array.isArray(res) ? res[0] : res;
-    if (!('output' in _cssChunk)) return null;
 
-    return _cssChunk.output[0];
+    const result = res as RollupOutput;
+    const output = result.output as OutputChunk[];
+    return output[0].code;
 }
 
-/**
- * @param {string} cssToInject
- * @param {string|null} styleId
- * @return {Plugin}
- */
-function injectionCSSCodePlugin(cssToInject: string, styleId?: string): Plugin {
+function buildPlugin(injectCode: string): Plugin {
     return {
-        name: 'vite:inject-css',
+        name: "vite:all-css",
         resolveId(id: string) {
-            if (id == cssInjectedByJsId) {
+            if (id == injectId) {
                 return id;
             }
         },
         load(id: string) {
-            if (id == cssInjectedByJsId) {
-                let cssCode = '';
-                cssToInject
-                    .trim()
-                    .split('}')
-                    .map((e) => (e += '}'))
-                    .slice(0, -1)
-                    .forEach((x) => {
-                        cssCode += `elementStyle.sheet.insertRule(${JSON.stringify(x)});`;
-                    });
-
-                return `try{if(typeof document != 'undefined'){var elementStyle = document.createElement('style');${
-                    typeof styleId == 'string' && styleId.length > 0 ? `elementStyle.id = '${styleId}';` : ''
-                }elementStyle.appendChild(document.createTextNode(''));document.head.appendChild(elementStyle);${cssCode}}}catch(e){console.error('vite-inject-css', e);}`;
+            if (id == injectId) {
+                return injectCode;
             }
         },
     };
 }
 
-export function removeLinkStyleSheets(html: string, cssFileName: string): string {
-    const removeCSS = new RegExp(`<link rel=".*"[^>]*?href=".*/?${cssFileName}"[^>]*?>`);
-    return html.replace(removeCSS, '');
+export function removeLinkStyleSheets(
+    html: string,
+    cssFileName: string
+): string {
+    const removeCSS = new RegExp(
+        `<link rel=".*"[^>]*?href=".*/?${cssFileName}"[^>]*?>`
+    );
+    return html.replace(removeCSS, "");
+}
+
+export function generateInsertRules(css: string): string[] {
+    return css
+        .trim()
+        .split("}")
+        .map((e) => (e += "}"))
+        .slice(0, -1)
+        .map((x) =>
+            x
+                .trim()
+                .replace(/\s\s+/g, "")
+                .replace(/(\r\n|\n|\r)/gm, "")
+        );
 }
